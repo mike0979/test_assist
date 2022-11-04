@@ -9,10 +9,23 @@
 
 
 from PyQt5 import QtCore, QtGui, QtWidgets
-
+from PyQt5.QtNetwork import QTcpSocket, QNetworkAccessManager, QNetworkRequest
+from PyQt5.QtCore import QJsonDocument, QJsonValue, QJsonParseError
+from work_thread import TcpThread, HttpThread
+from dao import Dao
 
 class Ui_Form(object):
+    def __init__(self):
+        self.tcp_socket = QTcpSocket()
+        self.form = None
+        self.threads = []
+        self.network_accessmanager = QNetworkAccessManager()
+        self.login_reply_object = []
+        self.reply_object = None
+        self.http_threads = []
+
     def setupUi(self, Form):
+        self.form = Form
         Form.setObjectName("Form")
         Form.resize(713, 782)
         self.gridLayout = QtWidgets.QGridLayout(Form)
@@ -49,9 +62,11 @@ class Ui_Form(object):
         self.verticalLayout = QtWidgets.QVBoxLayout()
         self.verticalLayout.setObjectName("verticalLayout")
         self.pushButton_connect = QtWidgets.QPushButton(self.tab)
+        self.pushButton_connect.clicked.connect(self.on_connect)
         self.pushButton_connect.setObjectName("pushButton_connect")
         self.verticalLayout.addWidget(self.pushButton_connect)
         self.pushButton_disconnect = QtWidgets.QPushButton(self.tab)
+        self.pushButton_disconnect.clicked.connect(self.on_disconnect)
         self.pushButton_disconnect.setObjectName("pushButton_disconnect")
         self.verticalLayout.addWidget(self.pushButton_disconnect)
         self.horizontalLayout_7.addLayout(self.verticalLayout)
@@ -61,18 +76,18 @@ class Ui_Form(object):
         self.label_4 = QtWidgets.QLabel(self.tab)
         self.label_4.setObjectName("label_4")
         self.horizontalLayout.addWidget(self.label_4)
-        self.spinBox = QtWidgets.QSpinBox(self.tab)
-        self.spinBox.setObjectName("spinBox")
-        self.horizontalLayout.addWidget(self.spinBox)
+        self.spinBox_clients_number_tcp = QtWidgets.QSpinBox(self.tab)
+        self.spinBox_clients_number_tcp.setObjectName("spinBox_clients_number_tcp")
+        self.horizontalLayout.addWidget(self.spinBox_clients_number_tcp)
         self.verticalLayout_4.addLayout(self.horizontalLayout)
         self.horizontalLayout_6 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_6.setObjectName("horizontalLayout_6")
         self.label = QtWidgets.QLabel(self.tab)
         self.label.setObjectName("label")
         self.horizontalLayout_6.addWidget(self.label)
-        self.spinBox_2 = QtWidgets.QSpinBox(self.tab)
-        self.spinBox_2.setObjectName("spinBox_2")
-        self.horizontalLayout_6.addWidget(self.spinBox_2)
+        self.spinBox_interval_tcp = QtWidgets.QSpinBox(self.tab)
+        self.spinBox_interval_tcp.setObjectName("spinBox_interval_tcp")
+        self.horizontalLayout_6.addWidget(self.spinBox_interval_tcp)
         self.verticalLayout_4.addLayout(self.horizontalLayout_6)
         self.horizontalLayout_10 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_10.setObjectName("horizontalLayout_10")
@@ -82,6 +97,7 @@ class Ui_Form(object):
         self.pushButton_send = QtWidgets.QPushButton(self.tab)
         self.pushButton_send.setObjectName("pushButton_send")
         self.horizontalLayout_10.addWidget(self.pushButton_send)
+        self.pushButton_send.clicked.connect(self.on_socket_send)
         self.verticalLayout_4.addLayout(self.horizontalLayout_10)
         self.tabWidget.addTab(self.tab, "")
         self.tab_2 = QtWidgets.QWidget()
@@ -133,9 +149,11 @@ class Ui_Form(object):
         self.verticalLayout_3 = QtWidgets.QVBoxLayout()
         self.verticalLayout_3.setObjectName("verticalLayout_3")
         self.pushButton_send_http = QtWidgets.QPushButton(self.tab_2)
+        self.pushButton_send_http.clicked.connect(self.on_http_send)
         self.pushButton_send_http.setObjectName("pushButton_send_http")
         self.verticalLayout_3.addWidget(self.pushButton_send_http)
         self.pushButton_stop = QtWidgets.QPushButton(self.tab_2)
+        self.pushButton_stop.clicked.connect(self.on_stop)
         self.pushButton_stop.setObjectName("pushButton_stop")
         self.verticalLayout_3.addWidget(self.pushButton_stop)
         self.horizontalLayout_11.addLayout(self.verticalLayout_3)
@@ -162,7 +180,7 @@ class Ui_Form(object):
         self.gridLayout.addWidget(self.tabWidget, 0, 0, 1, 1)
 
         self.retranslateUi(Form)
-        self.tabWidget.setCurrentIndex(1)
+        self.tabWidget.setCurrentIndex(0)
         QtCore.QMetaObject.connectSlotsByName(Form)
 
     def retranslateUi(self, Form):
@@ -189,3 +207,85 @@ class Ui_Form(object):
         self.label_3.setText(_translate("Form", "body:"))
         self.label_7.setText(_translate("Form", "response:"))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_2), _translate("Form", "http"))
+
+    def on_connect(self):
+        self.tcp_socket.connectToHost(self.lineEdit_ip.text(), int(self.lineEdit_port.text()))
+        if not self.tcp_socket.waitForConnected(2500):
+            msg = self.tcp_socket.errorString()
+            QtWidgets.QMessageBox.critical(self.form, "Error", msg)
+            return False
+        for i in range(self.spinBox_clients_number_tcp.value()):
+            w = TcpThread()
+            w.interval = self.spinBox_interval_tcp.value()
+            w.s.connect(self.on_send)
+            self.threads.append(w)
+
+    def on_send(self):
+        out = QtCore.QByteArray()
+        stream = QtCore.QDataStream(out, QtCore.QIODevice.WriteOnly)
+        stream.writeQString(self.textEdit_2.toPlainText())
+        self.tcp_socket.write(out)
+
+    def on_socket_send(self):
+        for t in self.threads:
+            t.start()
+
+    def on_disconnect(self):
+        for t in self.threads:
+            t.is_send = False
+    def on_http_send(self):
+        d = Dao()
+        results = d.get_users(self.spinBox_clients_number.value())
+        for r in results:
+            data = QtCore.QByteArray()
+            json = QJsonDocument.fromJson(data).object()
+            json["account"] = r[0]
+            json["password"] = r[1]
+            outputjson = QJsonDocument(json).toJson(QJsonDocument.Compact)
+
+            url = QtCore.QUrl('http://172.16.10.44/api/v1/login')
+            request = QNetworkRequest()
+            request.setUrl(url)
+            key = QtCore.QByteArray().append('use-agent')
+            value = QtCore.QByteArray().append('Mozilla/5.0 (Windows NT 6.1; rvhq,2.0.1) Gecko/20100101 Firefox/4.0.1')
+            request.setRawHeader(key, value)
+            senda = QtCore.QByteArray()
+            senda.append(outputjson)
+            network_reply = self.network_accessmanager.post(request, senda)
+            network_reply.finished.connect(self.on_login_response)
+            self.login_reply_object.append(network_reply)
+
+    def on_login_response(self):
+        for r in self.login_reply_object:
+            json = QJsonDocument.fromJson(r.readAll(), QJsonParseError())
+            if not json.object():
+                continue
+            token = json.object()["token"].toString()
+            w = HttpThread()
+            w.interval = self.spinBox_interval.value()
+            w.s.connect(self.send_request)
+            w.token = token
+            w.start()
+            self.http_threads.append(w)
+    def send_request(self, token):
+        url = QtCore.QUrl(self.lineEdit_url.text())
+        request = QNetworkRequest()
+        request.setUrl(url)
+        key = QtCore.QByteArray().append('token')
+        value = QtCore.QByteArray().append(token)
+        request.setRawHeader(key, value)
+        if self.comboBox.currentText() == 'GET':
+            self.reply_object = self.network_accessmanager.get(request)
+            self.reply_object.finished.connect(self.on_response)
+        # elif self.comboBox.currentText() == 'POST':
+        #     senda = QtCore.QByteArray()
+        #     senda.append(self.textEdit_request)
+        #     self.reply_object = self.network_accessmanager.post(request, senda)
+        # elif self.comboBox.currentText() == 'PUT':
+        #     self.reply_object = self.network_accessmanager.put(request)
+    def on_response(self):
+        self.textEdit_response.setText(str(self.reply_object.readAll(), encoding='utf-8'))
+
+    def on_stop(self):
+        for t in self.http_threads:
+            t.is_send = False
